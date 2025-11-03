@@ -9,7 +9,7 @@ from reportlab.lib.units import mm
 import io
 import zipfile
 import os
-from google.colab import userdata # Import userdata
+# from google.colab import userdata # Import userdata - REMOVIDO para compatibilidade com Streamlit Cloud
 
 # Caminho do logótipo
 LOGO_PATH = "esposack-logo.png" # Assumes the logo is in the same directory or accessible path
@@ -28,24 +28,40 @@ def gerar_certificado(cliente, guia, data, artigo, descricao, lotes, pdf_buffer,
 
     # Cabeçalho
     try:
-        logo_obj = Image(logo_path, width=35*mm, height=20*mm)
-        address_para = Paragraph(
-            "ESPOSACK – EMBALAGENS Lda.<br/>"
-            "Zona Industrial do Bouro, Pav. nº6<br/>"
-            "4740-010 Gandra - Esposende<br/>"
-            "Telefone: 253 962 064<br/>"
-            "www.esposack.pt",
-            styles['Body']
-        )
-        header_tbl = Table([[address_para, logo_obj]], colWidths=[None, 45*mm])
-        header_tbl.setStyle(TableStyle([
-            ('VALIGN', (0,0), (-1,-1), 'TOP'),
-            ('ALIGN', (1,0), (1,0), 'RIGHT'),
-        ]))
-        story.append(header_tbl)
-        story.append(Spacer(1, 12))
+        # Verificar se o ficheiro do logótipo existe antes de tentar carregá-lo
+        if os.path.exists(logo_path):
+            logo_obj = Image(logo_path, width=35*mm, height=20*mm)
+            address_para = Paragraph(
+                "ESPOSACK – EMBALAGENS Lda.<br/>"
+                "Zona Industrial do Bouro, Pav. nº6<br/>"
+                "4740-010 Gandra - Esposende<br/>"
+                "Telefone: 253 962 064<br/>"
+                "www.esposack.pt",
+                styles['Body']
+            )
+            header_tbl = Table([[address_para, logo_obj]], colWidths=[None, 45*mm])
+            header_tbl.setStyle(TableStyle([
+                ('VALIGN', (0,0), (-1,-1), 'TOP'),
+                ('ALIGN', (1,0), (1,0), 'RIGHT'),
+            ]))
+            story.append(header_tbl)
+            story.append(Spacer(1, 12))
+        else:
+            # Adicionar apenas as informações da empresa se o logótipo não for encontrado
+            address_para = Paragraph(
+                "ESPOSACK – EMBALAGENS Lda.<br/>"
+                "Zona Industrial do Bouro, Pav. nº6<br/>"
+                "4740-010 Gandra - Esposende<br/>"
+                "Telefone: 253 962 064<br/>"
+                "www.esposack.pt",
+                styles['Body']
+            )
+            story.append(address_para)
+            story.append(Spacer(1, 12))
+            st.warning(f"Logótipo não encontrado em {logo_path}. Gerando certificado sem logótipo.") # Usar st.warning no Streamlit
+
     except Exception as e:
-        st.warning(f"Erro ao carregar ou adicionar logótipo: {e}")
+        st.error(f"Erro ao carregar ou adicionar logótipo: {e}") # Usar st.error no Streamlit
         story.append(Paragraph("Certificado de Conformidade", styles['TitlePT']))
         story.append(Spacer(1, 12))
 
@@ -123,44 +139,55 @@ if uploaded_file is not None:
         # Process data and generate certificates if DataFrame is not empty
         if df is not None and not df.empty:
             # Group by Guia to create separate zip files for each
-            grouped_by_guia = df.groupby("Nº Guia")
+            if "Nº Guia" in df.columns:
+                grouped_by_guia = df.groupby("Nº Guia")
 
-            for guia, guia_group in grouped_by_guia:
-                pdf_buffers = {}
-                # Group by relevant columns within each Guia group
-                grouped_deliveries = guia_group.groupby(["Cliente", "Nº Guia", "Data", "Artigo", "Descrição do Artigo"])
+                for guia, guia_group in grouped_by_guia:
+                    pdf_buffers = {}
+                    # Group by relevant columns within each Guia group
+                    # Ensure all grouping columns exist before grouping
+                    grouping_cols = ["Cliente", "Nº Guia", "Data", "Artigo", "Descrição do Artigo"]
+                    if all(col in guia_group.columns for col in grouping_cols):
+                         grouped_deliveries = guia_group.groupby(grouping_cols)
 
-                for (cliente, current_guia, data, artigo, descricao), grupo in grouped_deliveries:
-                    lotes = grupo[["Lote", "Quantidade", "Unidade"]].values.tolist()
-                    pdf_buffer = io.BytesIO()
-                    # Ensure data is in string format, especially for the date
-                    data_str = data.strftime('%d/%m/%Y') if isinstance(data, pd.Timestamp) else str(data)
-                    gerar_certificado(cliente, current_guia, data_str, artigo, descricao, lotes, pdf_buffer, LOGO_PATH)
-                    pdf_buffer.seek(0) # Rewind the buffer
-                    # Use a filename that makes sense for a certificate per article
-                    filename = f"Certificado_Guia_{current_guia}_Artigo_{artigo}.pdf"
-                    pdf_buffers[filename] = pdf_buffer
+                         for (cliente, current_guia, data, artigo, descricao), grupo in grouped_deliveries:
+                             lotes = grupo[["Lote", "Quantidade", "Unidade"]].values.tolist()
+                             pdf_buffer = io.BytesIO()
+                             # Ensure data is in string format, especially for the date
+                             data_str = data.strftime('%d/%m/%Y') if isinstance(data, pd.Timestamp) else str(data)
+                             gerar_certificado(cliente, current_guia, data_str, artigo, descricao, lotes, pdf_buffer, LOGO_PATH)
+                             pdf_buffer.seek(0) # Rewind the buffer
+                             # Use a filename that makes sense for a certificate per article
+                             filename = f"Certificado_Guia_{current_guia}_Artigo_{artigo}.pdf"
+                             pdf_buffers[filename] = pdf_buffer
 
-                st.success(f"Certificados gerados com sucesso para a Guia {guia}!")
+                         st.success(f"Certificados gerados com sucesso para a Guia {guia}!")
 
-                # Create a zip file in memory for this Guia
-                zip_buffer = io.BytesIO()
-                zip_filename = f"Certificados_esposack_Guia_{guia}.zip"
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for filename, pdf_buffer in pdf_buffers.items():
-                        zip_file.writestr(filename, pdf_buffer.getvalue())
+                         # Create a zip file in memory for this Guia
+                         zip_buffer = io.BytesIO()
+                         zip_filename = f"Certificados_esposack_Guia_{guia}.zip"
+                         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                             for filename, pdf_buffer in pdf_buffers.items():
+                                 zip_file.writestr(filename, pdf_buffer.getvalue())
 
-                zip_buffer.seek(0) # Rewind the buffer
+                         zip_buffer.seek(0) # Rewind the buffer
 
-                # Provide a download button for this Guia's zip file
-                st.download_button(
-                    label=f"Descarregar Certificados Guia {guia} (ZIP)",
-                    data=zip_buffer,
-                    file_name=zip_filename,
-                    mime="application/zip"
-                )
+                         # Provide a download button for this Guia's zip file
+                         st.download_button(
+                             label=f"Descarregar Certificados Guia {guia} (ZIP)",
+                             data=zip_buffer,
+                             file_name=zip_filename,
+                             mime="application/zip"
+                         )
+                    else:
+                        missing_cols = [col for col in grouping_cols if col not in guia_group.columns]
+                        st.warning(f"Grupo da Guia {guia} ignorado: Faltam as colunas necessárias para agrupar: {', '.join(missing_cols)}")
 
-            st.write("Processamento de todas as guias concluído.")
+                st.write("Processamento de todas as guias concluído.")
+
+            else:
+                 st.error("A coluna 'Nº Guia' não foi encontrada no ficheiro Excel. Certifique-se de que o nome da coluna está correto.")
+
 
         else:
             st.info("O ficheiro Excel está vazio ou não contém os dados esperados.")
